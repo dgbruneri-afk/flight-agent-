@@ -1,0 +1,41 @@
+name: Check flights
+
+on:
+  schedule:
+    - cron: "0 7 * * *"     # once a day at 07:00 UTC
+  workflow_dispatch: {}      # manual trigger button
+
+permissions:
+  contents: write             # needed to commit updated state/prices.json
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run flight check
+        env:
+          AMADEUS_API_KEY: ${{ secrets.AMADEUS_API_KEY }}
+          AMADEUS_API_SECRET: ${{ secrets.AMADEUS_API_SECRET }}
+          AMADEUS_HOSTNAME: ${{ vars.AMADEUS_HOSTNAME || 'production' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m src.main
+
+      - name: Commit updated state
+        run: |
+          if [ -n "$(git status --porcelain state/)" ]; then
+            git config user.name "flight-monitor-bot"
+            git config user.email "actions@github.com"
+            git add state/
+            git commit -m "chore: update price snapshot [skip ci]"
+            git push
+          fi

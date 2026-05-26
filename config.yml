@@ -1,0 +1,43 @@
+# Flight monitor config
+# Edit this to change what the agent searches.
+
+origins:
+  - MXP   # Milan Malpensa
+  - LIN   # Milan Linate
+  - BGY   # Milan Bergamo
+  - FCO   # Rome Fiumicino
+
+destinations:
+  - ANC   # Anchorage
+  - FAI   # Fairbanks (open-jaw option)
+
+# Stopover hubs for the "visit cousin in SF / break up long flight" scenario.
+# The agent will build multi-city itineraries: origin -> hub -> destination.
+stopover_hubs:
+  - SFO
+  - SEA
+  - LAX
+
+# Date window. Outbound and return are each searched +/- 2 days.
+outbound_target: 2026-08-06
+return_target:   2026-08-20
+date_flex_days:  2
+
+# Trip parameters
+adults: 1
+currency: EUR
+travel_class: ECONOMY
+nonstop_only: false
+max_results_per_query: 3   # only keep top N cheapest per permutation
+
+# Alerting thresholds (in percent)
+alert_drop_pct: 10            # notify if a previously-seen route drops by >= 10%
+alert_new_route_pct: 15       # notify if a newly-discovered route is >= 15% cheaper than current cheapest
+
+# Search strategy
+include_direct_roundtrip: true     # origin <-> destination
+include_open_jaw: true             # origin -> ANC, FAI -> origin (and reverse)
+include_stopover_multicity: true   # origin -> hub -> destination (and reverse)
+
+# State file (relative to repo root)
+state_path: state/prices.json
