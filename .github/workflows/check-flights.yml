@@ -2,7 +2,7 @@ name: Check flights
 
 on:
   schedule:
-    - cron: "0 7 * * *"     # once a day at 07:00 UTC
+    - cron: "0 7 */2 * *"   # every other day at 07:00 UTC (~75 SerpAPI calls/mo, within free tier)
   workflow_dispatch: {}      # manual trigger button
 
 permissions:
@@ -23,9 +23,7 @@ jobs:
 
       - name: Run flight check
         env:
-          AMADEUS_API_KEY: ${{ secrets.AMADEUS_API_KEY }}
-          AMADEUS_API_SECRET: ${{ secrets.AMADEUS_API_SECRET }}
-          AMADEUS_HOSTNAME: ${{ vars.AMADEUS_HOSTNAME || 'production' }}
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -m src.main

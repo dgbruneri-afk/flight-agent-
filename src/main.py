@@ -10,30 +10,32 @@ import yaml
 from . import diff, notify, search
 
 
+def _print_summary(results: list[dict]) -> None:
+    for r in sorted(results, key=lambda x: (x["segment"] != "TRIP_TOTAL", x["segment"], x["price"])):
+        if r["segment"] == "TRIP_TOTAL":
+            print(f"  TRIP TOTAL: {r['price']:.0f} {r['currency']}")
+            for b in r.get("breakdown", []):
+                print(f"     - {b['segment_label']}: {b['price']:.0f} ({b['outbound']}→{b['return']})")
+        else:
+            print(f"  {r['price']:.0f} {r['currency']}  {r['segment_label']}  {r['outbound']}→{r['return']}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.yml")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Skip Telegram send, print alerts to stdout instead.",
-    )
-    parser.add_argument(
-        "--seed",
-        action="store_true",
-        help="First-time run: store baseline without sending alerts.",
-    )
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Skip Telegram send; print alerts to stdout.")
+    parser.add_argument("--seed", action="store_true",
+                        help="First-time run: store baseline without sending alerts.")
     args = parser.parse_args()
 
     cfg = yaml.safe_load(Path(args.config).read_text())
     state_path = cfg["state_path"]
 
-    print(f"[info] building search grid…")
-    queries = search.build_permutations(cfg)
-    print(f"[info] {len(queries)} queries to run")
-
-    results = search.search(cfg, queries)
-    print(f"[info] {len(results)} priced offers returned")
+    print("[info] searching…")
+    results = search.run_search(cfg)
+    print(f"[info] {len(results)} priced results:")
+    _print_summary(results)
 
     previous = diff.load_state(state_path)
 

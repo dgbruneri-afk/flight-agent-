@@ -3,3 +3,9 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# Browser profiles dropped by letsfg connectors when run locally
+.edreams_chrome_data/
+*_chrome_data/
+.playwright/
+ms-playwright/

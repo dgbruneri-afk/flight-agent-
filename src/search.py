@@ -1,192 +1,167 @@
-"""Amadeus Flight Offers Search wrapper + query permutation builder.
+"""SerpAPI Google Flights search + trip-total combination logic.
 
-Returns a list of `Quote` dicts shaped like:
+Each segment has one or more date options (outbound/return pairs). We price
+every option, keep the cheapest per segment, and sum the cheapest of the
+segments flagged `in_total` to get the trip total.
+
+Returns a list of `Quote` dicts:
   {
-    "route_id": "MXP-ANC-direct-2026-08-06-2026-08-20",
-    "kind": "direct" | "open_jaw" | "stopover",
-    "legs": [{"from": "MXP", "to": "ANC", "date": "2026-08-06"}, ...],
-    "price": 1234.56,
-    "currency": "EUR",
-    "carriers": ["LH", "AS"],
+    "route_id": "MXP-SFO:2026-08-05:2026-08-21",
+    "segment": "MXP-SFO",
+    "segment_label": "Milan <-> San Francisco",
+    "departure": "MXP", "arrival": "SFO",
+    "outbound": "2026-08-05", "return": "2026-08-21",
+    "price": 812.0, "currency": "EUR",
+    "carriers": ["LH", "UA"],
+    "duration_min": 1180,
     "deeplink": "https://www.google.com/travel/flights?q=...",
   }
+Plus one synthetic TRIP_TOTAL quote with a `breakdown` list.
 """
 from __future__ import annotations
 
-import itertools
 import os
 import time
-from dataclasses import dataclass
-from datetime import date, timedelta
-from typing import Iterable
+from datetime import date
 
-from amadeus import Client, ResponseError
+import requests
 
-
-@dataclass
-class Leg:
-    origin: str
-    destination: str
-    date: str  # YYYY-MM-DD
+SERPAPI_URL = "https://serpapi.com/search.json"
 
 
-def _client() -> Client:
-    return Client(
-        client_id=os.environ["AMADEUS_API_KEY"],
-        client_secret=os.environ["AMADEUS_API_SECRET"],
-        hostname=os.environ.get("AMADEUS_HOSTNAME", "production"),
-    )
+def _isodate(d: str | date | None) -> str | None:
+    if d is None:
+        return None
+    return d.isoformat() if isinstance(d, date) else str(d)
 
 
-def _date_range(target: str | date, flex: int) -> list[str]:
-    d = target if isinstance(target, date) else date.fromisoformat(target)
-    return [(d + timedelta(days=i)).isoformat() for i in range(-flex, flex + 1)]
-
-
-def _google_flights_link(legs: list[Leg]) -> str:
-    parts = ["Flights"]
-    for i, leg in enumerate(legs):
-        connector = "from" if i == 0 else "then"
-        parts += [connector, leg.origin, "to", leg.destination, "on", leg.date]
+def _google_flights_link(dep: str, arr: str, outbound: str, ret: str | None) -> str:
+    parts = ["Flights", "from", dep, "to", arr, "on", outbound]
+    if ret:
+        parts += ["returning", ret]
+    else:
+        parts += ["one", "way"]
     return "https://www.google.com/travel/flights?q=" + "+".join(parts)
 
 
-def build_permutations(cfg: dict) -> list[dict]:
-    """Build the full search grid as a list of query specs."""
-    outs = _date_range(cfg["outbound_target"], cfg["date_flex_days"])
-    rets = _date_range(cfg["return_target"], cfg["date_flex_days"])
-    queries: list[dict] = []
-
-    for origin in cfg["origins"]:
-        for out_date, ret_date in itertools.product(outs, rets):
-            if cfg.get("include_direct_roundtrip", True):
-                for dest in cfg["destinations"]:
-                    queries.append({
-                        "kind": "direct",
-                        "legs": [
-                            Leg(origin, dest, out_date),
-                            Leg(dest, origin, ret_date),
-                        ],
-                    })
-
-            if cfg.get("include_open_jaw", True) and len(cfg["destinations"]) >= 2:
-                a, b = cfg["destinations"][0], cfg["destinations"][1]
-                queries.append({
-                    "kind": "open_jaw",
-                    "legs": [
-                        Leg(origin, a, out_date),
-                        Leg(b, origin, ret_date),
-                    ],
-                })
-                queries.append({
-                    "kind": "open_jaw",
-                    "legs": [
-                        Leg(origin, b, out_date),
-                        Leg(a, origin, ret_date),
-                    ],
-                })
-
-            if cfg.get("include_stopover_multicity", True):
-                # Pick ONE hub per (origin, date) combo, rotating by hash —
-                # keeps API budget down while still covering all hubs over time.
-                hubs = cfg.get("stopover_hubs", [])
-                if hubs:
-                    hub = hubs[hash((origin, out_date, ret_date)) % len(hubs)]
-                    primary_dest = cfg["destinations"][0]
-                    queries.append({
-                        "kind": "stopover",
-                        "hub": hub,
-                        "legs": [
-                            Leg(origin, hub, out_date),
-                            Leg(hub, primary_dest, out_date),
-                            Leg(primary_dest, origin, ret_date),
-                        ],
-                    })
-
-    return queries
+def _search_one(dep: str, arr: str, outbound: str, ret: str | None, cfg: dict) -> dict:
+    params = {
+        "engine": "google_flights",
+        "departure_id": dep,
+        "arrival_id": arr,
+        "outbound_date": outbound,
+        "currency": cfg.get("currency", "EUR"),
+        "hl": "en",
+        "adults": cfg.get("adults", 1),
+        "travel_class": cfg.get("travel_class", 1),
+        "api_key": os.environ["SERPAPI_KEY"],
+    }
+    if ret:
+        params["return_date"] = ret
+        params["type"] = 1  # round trip
+    else:
+        params["type"] = 2  # one way
+    resp = requests.get(SERPAPI_URL, params=params, timeout=60)
+    resp.raise_for_status()
+    return resp.json()
 
 
-def _route_id(q: dict) -> str:
-    parts = [q["kind"]]
-    for leg in q["legs"]:
-        parts.append(f"{leg.origin}-{leg.destination}-{leg.date}")
-    return ":".join(parts)
+def _cheapest_offer(data: dict) -> dict | None:
+    options = (data.get("best_flights") or []) + (data.get("other_flights") or [])
+    priced = [o for o in options if o.get("price") is not None]
+    if not priced:
+        return None
+    best = min(priced, key=lambda o: o["price"])
+    carriers = sorted({
+        seg.get("airline")
+        for seg in best.get("flights", [])
+        if seg.get("airline")
+    })
+    return {
+        "price": float(best["price"]),
+        "carriers": carriers,
+        "duration_min": best.get("total_duration"),
+    }
 
 
-def search(cfg: dict, queries: Iterable[dict] | None = None) -> list[dict]:
-    """Execute Amadeus searches for each query spec.
-
-    Falls back gracefully on individual query errors so one bad query
-    doesn't kill the whole run.
-    """
-    client = _client()
-    queries = list(queries) if queries is not None else build_permutations(cfg)
+def run_search(cfg: dict) -> list[dict]:
     results: list[dict] = []
 
-    for q in queries:
-        try:
-            body = _build_amadeus_body(q, cfg)
-            resp = client.shopping.flight_offers_search.post(body)
-            offers = resp.data or []
-        except ResponseError as e:
-            print(f"[warn] {_route_id(q)}: {e}")
-            continue
+    for seg in cfg["segments"]:
+        for opt in seg["date_options"]:
+            outbound = _isodate(opt["outbound"])
+            ret = _isodate(opt.get("return"))
+            try:
+                data = _search_one(seg["departure"], seg["arrival"], outbound, ret, cfg)
+            except requests.RequestException as e:
+                print(f"[warn] {seg['id']} {outbound}/{ret}: {e}")
+                continue
 
-        if not offers:
-            continue
+            if data.get("error"):
+                print(f"[warn] {seg['id']} {outbound}/{ret}: {data['error']}")
+                continue
 
-        # Sort by total price, keep top N
-        offers.sort(key=lambda o: float(o["price"]["total"]))
-        for o in offers[: cfg.get("max_results_per_query", 3)]:
+            offer = _cheapest_offer(data)
+            if not offer:
+                print(f"[warn] {seg['id']} {outbound}/{ret}: no priced offers")
+                continue
+
             results.append({
-                "route_id": _route_id(q),
-                "kind": q["kind"],
-                "legs": [vars(l) for l in q["legs"]],
-                "price": float(o["price"]["total"]),
-                "currency": o["price"].get("currency", cfg.get("currency", "EUR")),
-                "carriers": sorted({
-                    seg["carrierCode"]
-                    for itin in o["itineraries"]
-                    for seg in itin["segments"]
-                }),
-                "deeplink": _google_flights_link(q["legs"]),
+                "route_id": f"{seg['id']}:{outbound}:{ret or 'oneway'}",
+                "segment": seg["id"],
+                "segment_label": seg.get("label", seg["id"]),
+                "departure": seg["departure"],
+                "arrival": seg["arrival"],
+                "outbound": outbound,
+                "return": ret,
+                "price": offer["price"],
+                "currency": cfg.get("currency", "EUR"),
+                "carriers": offer["carriers"],
+                "duration_min": offer["duration_min"],
+                "in_total": seg.get("in_total", True),
+                "deeplink": _google_flights_link(seg["departure"], seg["arrival"], outbound, ret),
             })
+            time.sleep(0.3)  # gentle on the API
 
-        # Be polite — Amadeus has a per-second rate limit on the free tier
-        time.sleep(0.15)
+    total_quote = _trip_total(cfg, results)
+    if total_quote:
+        results.append(total_quote)
 
     return results
 
 
-def _build_amadeus_body(q: dict, cfg: dict) -> dict:
-    """Translate our internal query spec into an Amadeus POST body."""
-    origin_destinations = []
-    for i, leg in enumerate(q["legs"], start=1):
-        origin_destinations.append({
-            "id": str(i),
-            "originLocationCode": leg.origin,
-            "destinationLocationCode": leg.destination,
-            "departureDateTimeRange": {"date": leg.date},
+def _trip_total(cfg: dict, results: list[dict]) -> dict | None:
+    """Sum the cheapest priced option of each `in_total` segment."""
+    total = 0.0
+    breakdown = []
+    for seg in cfg["segments"]:
+        if not seg.get("in_total", True):
+            continue
+        seg_quotes = [r for r in results if r["segment"] == seg["id"]]
+        if not seg_quotes:
+            return None  # incomplete — can't compute a meaningful total
+        cheapest = min(seg_quotes, key=lambda r: r["price"])
+        total += cheapest["price"]
+        breakdown.append({
+            "segment_label": cheapest["segment_label"],
+            "route_id": cheapest["route_id"],
+            "price": cheapest["price"],
+            "outbound": cheapest["outbound"],
+            "return": cheapest["return"],
+            "carriers": cheapest["carriers"],
+            "deeplink": cheapest["deeplink"],
         })
 
+    if not breakdown:
+        return None
+
     return {
-        "currencyCode": cfg.get("currency", "EUR"),
-        "originDestinations": origin_destinations,
-        "travelers": [
-            {"id": str(i + 1), "travelerType": "ADULT"}
-            for i in range(cfg.get("adults", 1))
-        ],
-        "sources": ["GDS"],
-        "searchCriteria": {
-            "maxFlightOffers": cfg.get("max_results_per_query", 3),
-            "flightFilters": {
-                "cabinRestrictions": [{
-                    "cabin": cfg.get("travel_class", "ECONOMY"),
-                    "coverage": "MOST_SEGMENTS",
-                    "originDestinationIds": [str(i + 1) for i in range(len(q["legs"]))],
-                }],
-                **({"connectionRestriction": {"maxNumberOfConnections": 0}}
-                   if cfg.get("nonstop_only") else {}),
-            },
-        },
+        "route_id": "TRIP_TOTAL",
+        "segment": "TRIP_TOTAL",
+        "segment_label": cfg.get("trip_name", "Trip total"),
+        "price": round(total, 2),
+        "currency": cfg.get("currency", "EUR"),
+        "carriers": [],
+        "breakdown": breakdown,
+        "deeplink": None,
     }

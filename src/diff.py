@@ -15,56 +15,62 @@ def load_state(path: str) -> dict:
 def save_state(path: str, current: list[dict]) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    snapshot = {r["route_id"]: {"price": r["price"], "currency": r["currency"]}
-                for r in current}
+    snapshot = {
+        r["route_id"]: {
+            "price": r["price"],
+            "currency": r["currency"],
+            "segment": r["segment"],
+        }
+        for r in current
+    }
     p.write_text(json.dumps(snapshot, indent=2, sort_keys=True))
 
 
 def compute_alerts(current: list[dict], previous: dict, cfg: dict) -> list[dict]:
-    """Return a list of alert dicts describing what changed.
+    """Return alert dicts.
 
     Alert kinds:
-      - 'price_drop'   : known route dropped >= alert_drop_pct
-      - 'cheaper_route': newly-seen route is >= alert_new_route_pct cheaper
-                         than the current cheapest known route
+      - 'price_drop'      : a tracked option (or TRIP_TOTAL) dropped >= alert_drop_pct
+      - 'cheaper_option'  : a newly-seen date option is >= alert_new_route_pct
+                            cheaper than the prior cheapest option in its segment
     """
     drop_threshold = cfg.get("alert_drop_pct", 10) / 100.0
     new_threshold = cfg.get("alert_new_route_pct", 15) / 100.0
 
     alerts: list[dict] = []
 
-    # Known-route price drops
+    # Price drops on known routes (includes TRIP_TOTAL)
     for r in current:
         prev = previous.get(r["route_id"])
-        if not prev:
+        if not prev or prev["price"] <= 0:
             continue
-        prev_price = prev["price"]
-        if prev_price <= 0:
-            continue
-        change = (r["price"] - prev_price) / prev_price
+        change = (r["price"] - prev["price"]) / prev["price"]
         if change <= -drop_threshold:
             alerts.append({
                 "type": "price_drop",
                 "route": r,
-                "previous_price": prev_price,
+                "previous_price": prev["price"],
                 "change_pct": round(change * 100, 1),
             })
 
-    # New routes that beat the current cheapest known route
-    if previous:
-        current_cheapest = min((v["price"] for v in previous.values()), default=None)
-        if current_cheapest:
-            for r in current:
-                if r["route_id"] in previous:
-                    continue
-                if r["price"] <= current_cheapest * (1 - new_threshold):
-                    alerts.append({
-                        "type": "cheaper_route",
-                        "route": r,
-                        "baseline_price": current_cheapest,
-                        "change_pct": round(
-                            (r["price"] - current_cheapest) / current_cheapest * 100, 1
-                        ),
-                    })
+    # New date option that beats the prior cheapest within the same segment
+    prev_by_segment: dict[str, list[float]] = {}
+    for v in previous.values():
+        prev_by_segment.setdefault(v.get("segment"), []).append(v["price"])
+
+    for r in current:
+        if r["route_id"] in previous or r["segment"] == "TRIP_TOTAL":
+            continue
+        seg_prices = prev_by_segment.get(r["segment"])
+        if not seg_prices:
+            continue
+        baseline = min(seg_prices)
+        if r["price"] <= baseline * (1 - new_threshold):
+            alerts.append({
+                "type": "cheaper_option",
+                "route": r,
+                "baseline_price": baseline,
+                "change_pct": round((r["price"] - baseline) / baseline * 100, 1),
+            })
 
     return alerts
