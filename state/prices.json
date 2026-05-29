@@ -1,32 +1,32 @@
 {
   "MXP-ANC-direct:2026-08-06:2026-08-20": {
     "currency": "EUR",
-    "price": 1480.0,
+    "price": 1430.0,
     "segment": "MXP-ANC-direct"
   },
   "MXP-SFO:2026-08-05:2026-08-21": {
     "currency": "EUR",
-    "price": 660.0,
+    "price": 953.0,
     "segment": "MXP-SFO"
   },
   "MXP-SFO:2026-08-06:2026-08-21": {
     "currency": "EUR",
-    "price": 797.0,
+    "price": 953.0,
     "segment": "MXP-SFO"
   },
   "SFO-ANC:2026-08-06:2026-08-20": {
     "currency": "EUR",
-    "price": 398.0,
+    "price": 397.0,
     "segment": "SFO-ANC"
   },
   "SFO-ANC:2026-08-07:2026-08-20": {
     "currency": "EUR",
-    "price": 398.0,
+    "price": 397.0,
     "segment": "SFO-ANC"
   },
   "TRIP_TOTAL": {
     "currency": "EUR",
-    "price": 1058.0,
+    "price": 1350.0,
     "segment": "TRIP_TOTAL"
   }
 }
