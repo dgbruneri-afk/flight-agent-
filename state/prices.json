@@ -6,12 +6,12 @@
   },
   "MXP-SFO:2026-08-05:2026-08-21": {
     "currency": "EUR",
-    "price": 953.0,
+    "price": 881.0,
     "segment": "MXP-SFO"
   },
   "MXP-SFO:2026-08-06:2026-08-21": {
     "currency": "EUR",
-    "price": 953.0,
+    "price": 864.0,
     "segment": "MXP-SFO"
   },
   "SFO-ANC:2026-08-06:2026-08-20": {
@@ -26,7 +26,7 @@
   },
   "TRIP_TOTAL": {
     "currency": "EUR",
-    "price": 1350.0,
+    "price": 1261.0,
     "segment": "TRIP_TOTAL"
   }
 }
